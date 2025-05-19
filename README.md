@@ -1,1 +1,2 @@
-#В рот меня ебите да
+Зависимости
+pip install numpy matplotlib pillow torch torchvision
