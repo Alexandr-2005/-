@@ -1,108 +1,122 @@
-import random
 import numpy as np
 import pickle
 
-# Активизация и её производная
+# Улучшенная реализация нейронной сети с использованием Xavier инициализации,
+# ReLU в скрытых слоях, Softmax на выходе, кросс-энтропийной функции потерь и импульсом (momentum).
 
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
+def relu(z):
+    return np.maximum(0, z)
 
+def relu_prime(z):
+    return (z > 0).astype(float)
 
-def sigmoid_prime(z):
-    s = sigmoid(z)
-    return s * (1 - s)
+def softmax(z):
+    exp_z = np.exp(z - np.max(z, axis=0, keepdims=True))
+    return exp_z / np.sum(exp_z, axis=0, keepdims=True)
 
-
-class Network(object):
-    def __init__(self, sizes):
+class ImprovedNetwork:
+    def __init__(self, sizes, eta=0.01, alpha=0.9):
         self.num_layers = len(sizes)
         self.sizes = sizes
-        self.biases = [np.random.randn(y, 1) for y in sizes[1:]]
-        self.weights = [np.random.randn(y, x) for x, y in zip(sizes[:-1], sizes[1:])]
+        self.eta = eta  # learning rate
+        self.alpha = alpha  # momentum factor
+        # Xavier initialization for weights and zero biases
+        self.biases = [np.zeros((y, 1)) for y in sizes[1:]]
+        self.weights = [np.random.randn(y, x) * np.sqrt(2. / x)
+                        for x, y in zip(sizes[:-1], sizes[1:])]
+
+        self.vb = [np.zeros(b.shape) for b in self.biases]
+        self.vw = [np.zeros(w.shape) for w in self.weights]
 
     def feedforward(self, a):
-        for b, w in zip(self.biases, self.weights):
-            a = sigmoid(np.dot(w, a) + b)
+
+        for i, (b, w) in enumerate(zip(self.biases, self.weights)):
+            z = w.dot(a) + b
+            if i < self.num_layers - 2:
+                a = relu(z)
+            else:
+                a = softmax(z)
         return a
 
-    def SGD(self, training_data, epochs, mini_batch_size, eta, test_data=None):
-        training_data = list(training_data)
+    def SGD(self, training_data, epochs, mini_batch_size, eta=None, test_data=None,
+            decay=0.99, early_stopping=False, tol=5):
+
+        if eta is not None:
+            self.eta = eta
         n = len(training_data)
-        
-        if test_data is not None:
-            test_data = list(test_data)
-            n_test = len(test_data)
-        
-        for j in range(epochs):
-            random.shuffle(training_data)
-            mini_batches = [
-                training_data[k:k + mini_batch_size]
-                for k in range(0, n, mini_batch_size)
-            ]
+        best_acc = 0
+        no_improve = 0
 
-            for mini_batch in mini_batches:
-                self.update_mini_batch(mini_batch, eta)
+        for epoch in range(1, epochs + 1):
+            np.random.shuffle(training_data)
+            mini_batches = [training_data[k:k+mini_batch_size]
+                            for k in range(0, n, mini_batch_size)]
+            for batch in mini_batches:
+                self.update_mini_batch(batch)
 
-            # После каждой эпохи выводим статистику
-            if test_data is not None:
-                accuracy = self.evaluate(test_data)
-                print(f"Epoch {j+1}/{epochs}: {accuracy} / {n_test} correct ({accuracy/n_test:.4%})")
+            self.eta *= decay
+
+            if test_data:
+                acc = self.evaluate(test_data)
+                print(f"Epoch {epoch}/{epochs} — Accuracy: {acc}/{len(test_data)} ({acc/len(test_data):.2%}) — LR: {self.eta:.5f}")
+                if early_stopping:
+                    if acc > best_acc:
+                        best_acc = acc
+                        no_improve = 0
+                    else:
+                        no_improve += 1
+                        if no_improve >= tol:
+                            print("Early stopping triggered.")
+                            return
             else:
-                print(f"Epoch {j+1}/{epochs} complete")
+                print(f"Epoch {epoch}/{epochs} complete. LR: {self.eta:.5f}")
 
-    def update_mini_batch(self, mini_batch, eta):
+    def update_mini_batch(self, mini_batch):
         nabla_b = [np.zeros(b.shape) for b in self.biases]
         nabla_w = [np.zeros(w.shape) for w in self.weights]
         for x, y in mini_batch:
-            delta_nabla_b, delta_nabla_w = self.backprop(x, y)
-            nabla_b = [nb + dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
-            nabla_w = [nw + dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
-        self.weights = [w - (eta / len(mini_batch)) * nw
-                        for w, nw in zip(self.weights, nabla_w)]
-        self.biases  = [b - (eta / len(mini_batch)) * nb
-                        for b, nb in zip(self.biases, nabla_b)]
+            db, dw = self.backprop(x, y)
+            nabla_b = [nb + dnb for nb, dnb in zip(nabla_b, db)]
+            nabla_w = [nw + dnw for nw, dnw in zip(nabla_w, dw)]
+        m = len(mini_batch)
+        self.vw = [self.alpha * vw - (self.eta/m) * nw for vw, nw in zip(self.vw, nabla_w)]
+        self.vb = [self.alpha * vb - (self.eta/m) * nb for vb, nb in zip(self.vb, nabla_b)]
+        self.weights = [w + vw for w, vw in zip(self.weights, self.vw)]
+        self.biases  = [b + vb for b, vb in zip(self.biases, self.vb)]
 
     def backprop(self, x, y):
         nabla_b = [np.zeros(b.shape) for b in self.biases]
         nabla_w = [np.zeros(w.shape) for w in self.weights]
-
-        # feedforward
         activation = x
         activations = [x]
         zs = []
-        for b, w in zip(self.biases, self.weights):
-            z = np.dot(w, activation) + b
+
+        for i, (b, w) in enumerate(zip(self.biases, self.weights)):
+            z = w.dot(activation) + b
             zs.append(z)
-            activation = sigmoid(z)
+            activation = relu(z) if i < self.num_layers - 2 else softmax(z)
             activations.append(activation)
 
-        # обратное распространение ошибки
-        delta = self.cost_derivative(activations[-1], y) * sigmoid_prime(zs[-1])
+        delta = activations[-1] - y
         nabla_b[-1] = delta
-        nabla_w[-1] = np.dot(delta, activations[-2].T)
+        nabla_w[-1] = delta.dot(activations[-2].T)
 
         for l in range(2, self.num_layers):
             z = zs[-l]
-            sp = sigmoid_prime(z)
-            delta = np.dot(self.weights[-l+1].T, delta) * sp
+            delta = self.weights[-l+1].T.dot(delta) * relu_prime(z)
             nabla_b[-l] = delta
-            nabla_w[-l] = np.dot(delta, activations[-l-1].T)
-        return (nabla_b, nabla_w)
+            nabla_w[-l] = delta.dot(activations[-l-1].T)
+
+        return nabla_b, nabla_w
 
     def evaluate(self, test_data):
         correct = 0
         for x, y in test_data:
             pred = np.argmax(self.feedforward(x))
-            true = np.argmax(y) if hasattr(y, 'ndim') and y.ndim > 0 else int(y)
+            true = np.argmax(y) if hasattr(y, 'ndim') else int(y)
             if pred == true:
                 correct += 1
         return correct
-
-    def cost_derivative(self, output_activations, y):
-        return output_activations - y
-
-
-# Сохраняем и загружаем модель при необходимости
 
 def save_model(net, path):
     with open(path, 'wb') as f:
