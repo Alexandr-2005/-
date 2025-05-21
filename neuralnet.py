@@ -1,127 +1,165 @@
-import numpy as np
-import pickle
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+import copy
 
-# Улучшенная реализация нейронной сети с использованием Xavier инициализации,
-# ReLU в скрытых слоях, Softmax на выходе, кросс-энтропийной функции потерь и импульсом (momentum).
+class MLP(nn.Module):
 
-def relu(z):
-    return np.maximum(0, z)
+    def __init__(self, layer_sizes, dropout=0.0, batch_norm=False):
+        super(MLP, self).__init__()
+        layers = []
+        for i in range(len(layer_sizes) - 1):
+            in_size, out_size = layer_sizes[i], layer_sizes[i+1]
+            fc = nn.Linear(in_size, out_size)
+            nn.init.kaiming_normal_(fc.weight, nonlinearity='relu')
+            nn.init.zeros_(fc.bias)
+            layers.append(fc)
+            if i < len(layer_sizes) - 2:
+                layers.append(nn.ReLU(inplace=True))
+                if batch_norm:
+                    layers.append(nn.BatchNorm1d(out_size))
+                if dropout > 0.0:
+                    layers.append(nn.Dropout(dropout))
+        self.net = nn.Sequential(*layers)
 
-def relu_prime(z):
-    return (z > 0).astype(float)
+    def forward(self, x):
+        return self.net(x)
 
-def softmax(z):
-    exp_z = np.exp(z - np.max(z, axis=0, keepdims=True))
-    return exp_z / np.sum(exp_z, axis=0, keepdims=True)
 
-class ImprovedNetwork:
-    def __init__(self, sizes, eta=0.01, alpha=0.9):
-        self.num_layers = len(sizes)
-        self.sizes = sizes
-        self.eta = eta  # learning rate
-        self.alpha = alpha  # momentum factor
-        # Xavier initialization for weights and zero biases
-        self.biases = [np.zeros((y, 1)) for y in sizes[1:]]
-        self.weights = [np.random.randn(y, x) * np.sqrt(2. / x)
-                        for x, y in zip(sizes[:-1], sizes[1:])]
+class Trainer:
 
-        self.vb = [np.zeros(b.shape) for b in self.biases]
-        self.vw = [np.zeros(w.shape) for w in self.weights]
+    def __init__(self, model, device=None):
+        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = model.to(self.device)
 
-    def feedforward(self, a):
+    def fit(self,
+            train_dataset,
+            val_dataset=None,
+            batch_size=64,
+            epochs=20,
+            lr=1e-3,
+            optimizer_name='adam',
+            weight_decay=0.0,
+            lr_decay=1.0,
+            early_stopping=False,
+            patience=5):
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size) if val_dataset is not None else None
 
-        for i, (b, w) in enumerate(zip(self.biases, self.weights)):
-            z = w.dot(a) + b
-            if i < self.num_layers - 2:
-                a = relu(z)
-            else:
-                a = softmax(z)
-        return a
+        criterion = nn.CrossEntropyLoss()
+        if optimizer_name.lower() == 'adam':
+            optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        else:
+            optimizer = optim.SGD(self.model.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
 
-    def SGD(self, training_data, epochs, mini_batch_size, eta=None, test_data=None,
-            decay=0.99, early_stopping=False, tol=5):
+        scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
 
-        if eta is not None:
-            self.eta = eta
-        n = len(training_data)
-        best_acc = 0
-        no_improve = 0
+        best_model_wts = copy.deepcopy(self.model.state_dict())
+        best_acc = 0.0
+        history = {
+            'train_loss': [], 'train_acc': [],
+            'val_loss': [],   'val_acc': []
+        }
+        epochs_no_improve = 0
 
         for epoch in range(1, epochs + 1):
-            np.random.shuffle(training_data)
-            mini_batches = [training_data[k:k+mini_batch_size]
-                            for k in range(0, n, mini_batch_size)]
-            for batch in mini_batches:
-                self.update_mini_batch(batch)
+            self.model.train()
+            running_loss = 0.0
+            running_corrects = 0
+            total = 0
 
-            self.eta *= decay
+            for inputs, labels in train_loader:
+                inputs = inputs.view(inputs.size(0), -1).to(self.device)
+                labels = labels.to(self.device)
 
-            if test_data:
-                acc = self.evaluate(test_data)
-                print(f"Epoch {epoch}/{epochs} — Accuracy: {acc}/{len(test_data)} ({acc/len(test_data):.2%}) — LR: {self.eta:.5f}")
+                optimizer.zero_grad()
+                outputs = self.model(inputs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+
+                running_loss += loss.item() * labels.size(0)
+                preds = outputs.argmax(dim=1)
+                running_corrects += (preds == labels).sum().item()
+                total += labels.size(0)
+
+            epoch_loss = running_loss / total
+            epoch_acc = running_corrects / total
+            history['train_loss'].append(epoch_loss)
+            history['train_acc'].append(epoch_acc)
+
+            if val_loader is not None:
+                self.model.eval()
+                val_loss = 0.0
+                val_corrects = 0
+                val_total = 0
+
+                with torch.no_grad():
+                    for inputs, labels in val_loader:
+                        inputs = inputs.view(inputs.size(0), -1).to(self.device)
+                        labels = labels.to(self.device)
+
+                        outputs = self.model(inputs)
+                        loss = criterion(outputs, labels)
+
+                        val_loss += loss.item() * labels.size(0)
+                        preds = outputs.argmax(dim=1)
+                        val_corrects += (preds == labels).sum().item()
+                        val_total += labels.size(0)
+
+                val_epoch_loss = val_loss / val_total
+                val_epoch_acc = val_corrects / val_total
+                history['val_loss'].append(val_epoch_loss)
+                history['val_acc'].append(val_epoch_acc)
+
+                print(f"Epoch {epoch}/{epochs} | "
+                      f"Train loss: {epoch_loss:.4f}, acc: {epoch_acc:.2%} | "
+                      f"Val   loss: {val_epoch_loss:.4f}, acc: {val_epoch_acc:.2%}")
+
                 if early_stopping:
-                    if acc > best_acc:
-                        best_acc = acc
-                        no_improve = 0
+                    if val_epoch_acc > best_acc:
+                        best_acc = val_epoch_acc
+                        best_model_wts = copy.deepcopy(self.model.state_dict())
+                        epochs_no_improve = 0
                     else:
-                        no_improve += 1
-                        if no_improve >= tol:
-                            print("Early stopping triggered.")
-                            return
+                        epochs_no_improve += 1
+                        if epochs_no_improve >= patience:
+                            print("Early stopping triggered, restoring best model weights.")
+                            self.model.load_state_dict(best_model_wts)
+                            break
             else:
-                print(f"Epoch {epoch}/{epochs} complete. LR: {self.eta:.5f}")
+                print(f"Epoch {epoch}/{epochs} | Train loss: {epoch_loss:.4f}, acc: {epoch_acc:.2%}")
 
-    def update_mini_batch(self, mini_batch):
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        for x, y in mini_batch:
-            db, dw = self.backprop(x, y)
-            nabla_b = [nb + dnb for nb, dnb in zip(nabla_b, db)]
-            nabla_w = [nw + dnw for nw, dnw in zip(nabla_w, dw)]
-        m = len(mini_batch)
-        self.vw = [self.alpha * vw - (self.eta/m) * nw for vw, nw in zip(self.vw, nabla_w)]
-        self.vb = [self.alpha * vb - (self.eta/m) * nb for vb, nb in zip(self.vb, nabla_b)]
-        self.weights = [w + vw for w, vw in zip(self.weights, self.vw)]
-        self.biases  = [b + vb for b, vb in zip(self.biases, self.vb)]
+            scheduler.step()
 
-    def backprop(self, x, y):
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        activation = x
-        activations = [x]
-        zs = []
+        if val_loader is not None:
+            self.model.load_state_dict(best_model_wts)
 
-        for i, (b, w) in enumerate(zip(self.biases, self.weights)):
-            z = w.dot(activation) + b
-            zs.append(z)
-            activation = relu(z) if i < self.num_layers - 2 else softmax(z)
-            activations.append(activation)
+        return history
 
-        delta = activations[-1] - y
-        nabla_b[-1] = delta
-        nabla_w[-1] = delta.dot(activations[-2].T)
+    def predict(self, dataset, batch_size=64):
+        loader = DataLoader(dataset, batch_size=batch_size)
+        self.model.eval()
+        predictions = []
+        with torch.no_grad():
+            for inputs, _ in loader:
+                inputs = inputs.view(inputs.size(0), -1).to(self.device)
+                outputs = self.model(inputs)
+                preds = outputs.argmax(dim=1).cpu().tolist()
+                predictions.extend(preds)
+        return predictions
 
-        for l in range(2, self.num_layers):
-            z = zs[-l]
-            delta = self.weights[-l+1].T.dot(delta) * relu_prime(z)
-            nabla_b[-l] = delta
-            nabla_w[-l] = delta.dot(activations[-l-1].T)
 
-        return nabla_b, nabla_w
+def save_model(model, path):
 
-    def evaluate(self, test_data):
-        correct = 0
-        for x, y in test_data:
-            pred = np.argmax(self.feedforward(x))
-            true = np.argmax(y) if hasattr(y, 'ndim') else int(y)
-            if pred == true:
-                correct += 1
-        return correct
+    torch.save(model.state_dict(), path)
 
-def save_model(net, path):
-    with open(path, 'wb') as f:
-        pickle.dump(net, f)
 
-def load_model(path):
-    with open(path, 'rb') as f:
-        return pickle.load(f)
+def load_model(path, layer_sizes, device=None):
+
+    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+    model = MLP(layer_sizes).to(device)
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.eval()
+    return model
