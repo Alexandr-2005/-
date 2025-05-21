@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>EMNIST WebSocket Digit Recognizer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+  <h1>EMNIST Digit Recognizer (WebSocket)</h1>
+
+  <div class="canvas-container">
+    <canvas id="draw-canvas" width="280" height="280"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="recognize-btn">Recognize</button>
+    <button id="clear-btn">Clear</button>
+    <button id="load-test-btn">Load Test Sample</button>
+    <label>Test idx:
+      <input type="range" id="test-idx" min="0" max="0" value="0">
+      <span id="idx-val">0</span>
+    </label>
+    <label>Brush size:
+      <input type="range" id="brush-size" min="2" max="30" value="8">
+    </label>
+    <label>Threshold:
+      <input type="range" id="threshold" min="0" max="255" value="128">
+    </label>
+  </div>
+
+  <h2 id="result">Result:</h2>
+  <p id="probs"></p>
+
+  <h3>Preview:</h3>
+  <img id="preview-img" src="" alt="preview"/>
+
+  <!-- Socket.IO клиент -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
