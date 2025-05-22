@@ -1,4 +1,4 @@
-import torch
+import torch 
 from torch.utils.data import random_split
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
@@ -11,17 +11,18 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    layer_sizes    = [28*28, 512, 256, 128, 10]
-    dropout        = 0.5
-    batch_norm     = True
-    batch_size     = 128
-    epochs         = 30
-    lr             = 1e-3
-    optimizer      = 'adam'
-    weight_decay   = 1e-4
-    lr_decay       = 0.95       
-    early_stopping = True
-    patience       = 5
+    layer_sizes    = [28*28, 512, 256, 128, 10] # 28*28 = 784 пикселя входного изображения, 10 нейронов на выходе (для 10 классов MNIST)
+    dropout        = 0.5 # Регуляризация: вероятность отключения нейрона для предотвращения переобучения
+    batch_norm     = True # Использование пакетной нормализации для стабилизации обучения
+    batch_size     = 128 # Размер пакета: количество образцов для одновременной обработки перед обновлением весов
+    epochs         = 30 # Количество полных проходов через весь набор данных
+    lr             = 1e-3 # Скорость обучения: шаг обновления весов (важнейший гиперпараметр)
+    optimizer      = 'adam' # Оптимизатор: алгоритм обновления весов (Adam сочетает преимущества RMSprop и Momentum)
+    weight_decay   = 1e-4 # L2-регуляризация: штраф за большие веса для борьбы с переобучением
+    lr_decay       = 0.95 # Коэффициент затухания скорости обучения (применяется каждый эпоху/шаг)       
+    early_stopping = True # Ранняя остановка: автоматическое прекращение обучения при отсутствии улучшений
+    patience       = 5 # Терпение: количество эпох без улучшений до активации ранней остановки
+
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -62,7 +63,7 @@ def main():
         patience        = patience
     )
 
-    save_path = "emnist_digits_model.pth"
+    save_path = "trained_network.pkl"
     save_model(model, save_path)
     print(f"Model saved to '{save_path}'")
 
