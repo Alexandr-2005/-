@@ -156,10 +156,15 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 
-def load_model(path, layer_sizes, device=None):
-
+def load_model(
+    path,
+    layer_sizes=[28*28, 512, 256, 128, 10],
+    dropout=0.5,
+    batch_norm=True,
+    device=None
+):
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    model = MLP(layer_sizes).to(device)
+    model = MLP(layer_sizes, dropout=dropout, batch_norm=batch_norm).to(device)
     model.load_state_dict(torch.load(path, map_location=device))
     model.eval()
     return model
